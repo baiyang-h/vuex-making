@@ -1,5 +1,7 @@
 import Vue from 'vue'
 import Vuex from '@/vuex'
+import a from './a'
+import b from './b'
 
 // 1. vue.use(Vuex)    Vuex是一个对象  install 方法， 表示安装插件
 // 2. Vuex中有一个Store类
@@ -29,5 +31,7 @@ export default new Vuex.Store({
     }
   },
   modules: {
+    a,
+    b
   }
 })
