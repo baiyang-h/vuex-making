@@ -243,3 +243,277 @@ class Store {
 <button @click="$store.dispatch('aaa', 5)">异步更新</button>
 ```
 
+
+
+### Vuex中的模块搜集
+
+将数据进行格式化，格式化成一颗树
+
+```js
+this._modules = new ModuleCollection(options)  // options 就是 Vuex.Store中传入的参数
+```
+
+```js
+import { forEachValue } from "../util"
+import Module from './module'
+
+class ModuleCollection {
+  constructor(options) {
+    this.register([], options)    // stack = [根对象, a, c]  [根对象, b]  栈结构
+  }
+
+  register(path, rootModule) {
+    let newModule = new Module(rootModule)
+
+    if(path.length == 0) {
+      // 根模块
+      this.root = newModule
+    } else {
+      // [a]
+      // [b]
+      let parent = path.slice(0, -1).reduce((memo, current) => {
+        return memo.getChild(current)   
+      }, this.root)
+      parent.addChild(path[path.length-1], newModule)
+    }
+
+    if(rootModule.modules) {
+      forEachValue(rootModule.modules, (module, moduleName) => {
+        // [a]
+        // [b]
+        this.register(path.concat(moduleName), module)
+      })
+    }
+
+  }
+}
+
+export default ModuleCollection
+```
+
+```js
+import { forEachValue } from "../util"
+
+class Module {
+  constructor(newModule) {
+    this._raw = newModule
+    this._children = {}
+    this.state = newModule.state
+  }
+  getChild(key) {
+    return this._children[key]
+  }
+  addChild(key, module) {
+    this._children[key] = module
+  }
+	......
+}
+
+export default Module
+```
+
+最后我们的转换过程和结果如下：
+
+```js
+{
+	state: {},
+  getters: {},
+  mutations: {},
+  actions: {},
+  modules: {
+    a,    // a里又有模块c
+    b
+  }
+}
+```
+
+转换结果如下
+
+```js
+this.root = {
+  "_raw": "根模块",
+  "_children": {
+    "a": {
+    	"_raw": "a模块",
+      "_children": {
+        "c": {
+          "_raw": "c模块",
+          "_children": {},
+          "state": "c状态"
+        }
+    	},
+			"state": "a状态"
+		},
+    "b": {
+      "_raw": "b模块",
+      "_children": {},
+      "state": "b状态"
+    }
+	},
+	"state": "根模块自己的状态"
+}
+```
+
+
+
+### Vuex中的安装模块
+
+在根模块的状态中，将子模块通过模块名 定义在根模块中
+
+```js
+class Store {
+  constructor(options) {   // options 就是 {state, getters, mutation, actions}
+    const state = options.state    
+    this._actions = {}
+    this._mutations = {}
+    this._wrappedGetters = {}
+    
+    ......
+    installModule(this, state, [], this._modules.root)
+		......
+    
+  }
+}
+```
+
+通过 `installModule` 方法我们来处理 state、getter、mutation、action，
+
+- 将state处理成一层一层的模式
+- getter都处理到一起`store._wrappedGetters`
+- mutation也处理到一起`store._mutations`
+- action也处理到一起`store._actions`
+- 最后再进行递归 执行 `installModule` 方法，对于有子模块的情况，进行递归执行，这样，子模块的state、getter、mutation、action就能合并到根的state、getter、mutation、action上了。
+
+```js
+const installModule = (store, rootState, path, module) => {
+  // 这里我要对当前模块进行操作
+  // 这里我需要遍历当前模块上的 actions、mutation、getters 都把他定义在
+
+  // state
+  // 将所有的子模块的状态安装到父模块的状态上
+  // [a]  [b]          -----》 state
+  if(path.length>0) {   // vuex 可以动态的添加模块
+    let parent = path.slice(0, -1).reduce((memo, current) => {
+      return memo[current]
+    }, rootState)
+    // 如果这个对象 本身不是响应式的 那么 Vue.set 就相当于 
+    Vue.set(parent, path[path.length-1], module.state)
+  }
+
+  // mutation
+  module.forEachMutation((mutation, key) => {
+    store._mutations[key] = store._mutations[key] || []
+    store._mutations[key].push((payload) => {
+      mutation.call(store, module.state, payload)
+    })
+  })
+  // action
+  module.forEachAction((action, key) => {
+    store._actions[key] = store._actions[key] || []
+    store._actions[key].push((payload) => {
+      action.call(store, store, payload)
+    })
+  })
+  // getter
+  module.forEachGetter((getter, key) => {
+    // 模块中 getter的名字重复了 会覆盖
+    store._wrappedGetters[key] = function() {
+      return getter(module.state)
+    }
+  })
+  module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child)
+  })
+}
+```
+
+最后整个 store 实例的`state`、`_wrappedGetters`、`_mutations`、`_actions`的属性就变成了合并的结果了， 其中 `_wrappedGetters` 属性会被覆盖，不会有重复，`_mutations`和`_actions`结果是一个数组。如下：
+
+```js
+state = {
+  age: 10,
+  a: {
+    age: 222,
+    c: {
+      age: 444
+    }
+  },
+  b: {
+    age: 333
+  }
+}
+
+this._wrappedGetters = {
+  myAge() {......},
+  myAge2() {}
+}
+
+this._mutations = {
+  changeAge: [fn1, fn2, fn3, fn4],     // 这里的 fn 是同名的情况
+  changeAge1: [xx],
+ 	changeAge2: [xx]   
+}
+
+this._actions = {
+  changeAge: [fn1, xx],
+  changeAge1: [xx]
+}
+```
+
+
+
+### Vuex中的状态
+
+将 state 和 getters 都定义在当前的 vm 上
+
+```js
+class Stroe {
+  constructor() {
+    ......
+    resetStoreVM(this, state)
+    ......
+  }
+  
+  get state() {  // 属性访问器
+    return this._vm._data.$$state   //   虽然 vue 官方 内部 对于 $ 开头的属性不会挂载到 vm 实例上， 但是会挂载到 _data 上，所以，在vm._data 中是能够被访问到的。
+  }
+}
+```
+
+`resetStoreVM`第一个参数是 store 实例，第二个参数是 处理过的整体的 state。通过如下方法，我们可以将state和getters转成了响应式属性，其中需要借用Vue的data和计算属性来做到。这样就会进行依赖收集了，而且计算属性具有缓存效果，所以getters也是。
+
+将 `_wrappedGetters`上的属性和值定义到计算属性上。
+
+现在store 实例上也存在 getters 属性了。
+
+```js
+function resetStoreVM(store, state) {
+  const computed = {};    // 定义计算属性
+  store.getters = {};    // 定义 store 中的 getters
+  
+  forEachValue(store._wrappedGetters, (fn, key) => {
+    computed[key] = () => {
+      return fn()
+    }
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key]    // 去计算属性中取值
+    })
+  })
+
+  store._vm = new Vue({
+    data: {
+      $$state: state,
+    },
+    computed      //计算属性有缓存效果
+  })
+}
+```
+
+```js
+state
+_wrappedGetters
+getters
+_mutations
+_actions
+```
+

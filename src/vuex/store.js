@@ -1,44 +1,101 @@
 import applyMixin from "./mixin"
 import { forEachValue } from './util'
+import ModuleCollection from "./module/module-collection"
 
 export let Vue
+
+/**
+ * 
+ * @param {*} store         store 实例
+ * @param {*} rootState     根 state
+ * @param {*} path          所有路径，即所有嵌套模块 例如 [a, c] [b]
+ * @param {*} module        // 我们格式化后的模块结果
+ */
+const installModule = (store, rootState, path, module) => {
+  
+  // 这里我要对当前模块进行操作
+  // 这里我需要遍历当前模块上的 actions、mutation、getters 都把他定义在
+
+  // state
+  // 将所有的子模块的状态安装到父模块的状态上
+  // [a]  [b]          -----》 state
+  if(path.length>0) {   // vuex 可以动态的添加模块
+    let parent = path.slice(0, -1).reduce((memo, current) => {
+      return memo[current]
+    }, rootState)
+    // 如果这个对象 本身不是响应式的 那么 Vue.set 就相当于 
+    Vue.set(parent, path[path.length-1], module.state)
+  }
+
+  // mutation
+  module.forEachMutation((mutation, key) => {
+    store._mutations[key] = store._mutations[key] || []
+    store._mutations[key].push((payload) => {
+      mutation.call(store, module.state, payload)
+    })
+  })
+  // action
+  module.forEachAction((action, key) => {
+    store._actions[key] = store._actions[key] || []
+    store._actions[key].push((payload) => {
+      action.call(store, store, payload)
+    })
+  })
+  // getter
+  module.forEachGetter((getter, key) => {
+    // 模块中 getter的名字重复了 会覆盖
+    store._wrappedGetters[key] = function() {
+      return getter(module.state)
+    }
+  })
+  module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child)
+  })
+}
+
+function resetStoreVM(store, state) {
+  const computed = {};    // 定义计算属性
+  store.getters = {};    // 定义 store 中的 getters
+  
+  forEachValue(store._wrappedGetters, (fn, key) => {
+    computed[key] = () => {
+      return fn()
+    }
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key]    // 去计算属性中取值
+    })
+  })
+
+  store._vm = new Vue({
+    data: {
+      $$state: state,
+    },
+    computed      //计算属性有缓存效果
+  })
+}
 
 export class Store {    // 容器的初始化
   constructor(options) {   // options 就是你 Vuex.Store({state, mutation, actions})
     const state = options.state    // 数据变化要更新视图 （vue的核心逻辑 依赖收集）,,  所以 要 改为 响应式数据
-    
-    // 2. 处理 getters 属性 具有缓存的computed 带有缓存 （多次取值是如果值不变是不会重新取值的）
-    const computed = {}
-    this.getters = {}
-    forEachValue(options.getters, (fn, key) => {
-      computed[key] = () => {
-        return fn(this.state)
-      }
-      Object.defineProperty(this.getters, key, {
-        get: () => this._vm[key]
-      })
-    })
 
-    // 响应式数据 new Vue({data})    // 这里的数据就是响应式的
-    
-    // 1. 添加状态逻辑
-    this._vm = new Vue({
-      data: {   // 属性如果是通过 $ 开头的 默认不会将这个属性挂载到 vm 上
-        $$state: state,    // 会将$$state 对应的对象 都通过 defineProperty 来进行属性劫持
-      },
-      computed
-    })
+    this._actions = {}
+    this._mutations = {}
+    this._wrappedGetters = {}
 
-    // 3. 实现 mutations
-    this.mutations = {}
-    this.actions = {}
-    forEachValue(options.mutations, (fn, key) => {
-      // this.mutations = {myAge: payload => 用户定义的逻辑(state, payload)}
-      this.mutations[key] = payload => fn(this.state, payload)
-    })
-    forEachValue(options.actions, (fn, key) => {
-      this.actions[key] = payload => fn(this, payload)
-    })
+    // 数据的格式化 格式化成我想要的结果（树）
+
+    // 1. 模块收集
+    this._modules = new ModuleCollection(options)
+
+    // 根模块的状态中 要将子模块通过模块名 定义在根模块上
+    // 2.安装模块
+    installModule(this, state, [], this._modules.root)
+
+    console.log(state, this._wrappedGetters, this._mutations, this._actions)
+
+    // 3. 将状态和getters 都定义在当前的vm上
+    resetStoreVM(this, state)
+
   }
 
   get state() {  // 属性访问器
@@ -53,11 +110,11 @@ export class Store {    // 容器的初始化
 */
   commit = (type, payload) => {     // 为什么要这么写， 因为 用户可能会使用解构等方式获取这个方法，这样this就不是指向当前实例，， 所以为了保证当前this指向，所以用箭头函数
     // 调用 commit 其实就是去找 刚才绑定好的mutation
-    this.mutations[type](payload)
+    this._mutations[type].forEach(mutation => mutation.call(this, payload))    // 发布订阅
   }
 
   dispatch = (type, payload) => {
-    this.actions[type](payload)
+    this._actions[type].forEach(action => action.call(this, payload))      // 发布订阅
   }
 }
 

@@ -1,8 +1,7 @@
-import c from './c'
 export default {
   namespaced: true,
   state: {
-    age: 222
+    age: 444
   },
   getters: {
 
@@ -14,8 +13,5 @@ export default {
   },
   actions: {
 
-  },
-  modules: {
-    c
   }
 }
