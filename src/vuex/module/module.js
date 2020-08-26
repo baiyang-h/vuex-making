@@ -1,6 +1,9 @@
 import { forEachValue } from "../util"
 
 class Module {
+  get namespaced() {
+    return !!this._raw.namespaced
+  }
   constructor(newModule) {
     this._raw = newModule
     this._children = {}

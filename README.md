@@ -517,3 +517,83 @@ _mutations
 _actions
 ```
 
+### 命名空间的实现
+
+现在我们要实现Vuex的命名空间，主要是看 module 中的 namespaced 属性。其思想就是对路径的字符串拼接，增加上模块名。给 getters、mutations、actions的key值拼接上模块名。
+ 
+主要是在初始化store时 的 installModule 方法中进行
+```js
+class Store {
+  constructor() {
+    ......
+    // 2.安装模块
+    installModule(this, state, [], this._modules.root)
+    ......
+  }
+}
+
+```
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  // 我要给当前订阅的事件 增加一个命名空间   a/change   b/changge   a/c/change    path [a]  [b]   [a, c]  
+  let namespace = store._modules.getNamespaced(path)      // 返回前缀即可
+  ...
+}
+```
+我们在 ModuleCollection 类中 增加一个方法，用于获取 拼接 namespaced 后的 字符串路径值，然后再将其绑定到 getters、mutations、actions上
+```js
+class ModuleCollection {
+  ...
+  getNamespaced(path) {
+    let root = this.root      //从根模块开始找
+    return path.reduce((str, key) => {
+      root = root.getChild(key)     // 不停的去找当前的模块
+      return str + ( root.namespaced ? key + '/' : '')   // a/c/   c/
+    }, '')    // 参数是一个字符串
+  }
+  ...
+}
+```
+但是注意这里的 `root.namespaced` ，此时因为 root 是进过我们处理过得到的树，我们要先给该root增加上 namespaced 属性，即 Module 类增加上 namespaced 访问器属性
+```js
+class Module {
+  get namespaced() {
+    return !!this._raw.namespaced
+  }
+  ...
+}
+```
+最后 给每个 需要拼接上 命名空间的地方增加上该值，如 `store._mutations[namespace+key]`
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  // 我要给当前订阅的事件 增加一个命名空间   a/change   b/changge   a/c/change    path [a]  [b]   [a, c]  
+  let namespace = store._modules.getNamespaced(path)      // 返回前缀即可
+
+  // mutation
+  module.forEachMutation((mutation, key) => {
+    store._mutations[namespace+key] = store._mutations[namespace+key] || []
+    store._mutations[namespace+key].push((payload) => {
+      mutation.call(store, module.state, payload)
+    })
+  })
+  // action
+  module.forEachAction((action, key) => {
+    store._actions[namespace+key] = store._actions[namespace+key] || []
+    store._actions[namespace+key].push((payload) => {
+      action.call(store, store, payload)
+    })
+  })
+  // getter
+  module.forEachGetter((getter, key) => {
+    // 模块中 getter的名字重复了 会覆盖
+    store._wrappedGetters[namespace+key] = function() {
+      return getter(module.state)
+    }
+  })
+}
+```
+
+### Vuex的插件实现
+

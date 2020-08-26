@@ -6,6 +6,15 @@ class ModuleCollection {
     this.register([], options)    // stack = [根对象, a, c]  [根对象, b]  栈结构
   }
 
+  // 获取到 一个 namespaced 拼接的路径  
+  getNamespaced(path) {
+    let root = this.root      //从根模块开始找
+    return path.reduce((str, key) => {
+      root = root.getChild(key)     // 不停的去找当前的模块
+      return str + ( root.namespaced ? key + '/' : '')   // a/c/   c/
+    }, '')    // 参数是一个字符串
+  }
+
   register(path, rootModule) {
     let newModule = new Module(rootModule)
 

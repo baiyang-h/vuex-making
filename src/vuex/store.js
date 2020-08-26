@@ -4,6 +4,12 @@ import ModuleCollection from "./module/module-collection"
 
 export let Vue
 
+function getState(store, path) {    // 获取最新的状态
+  return path.reduce((newState, current) => {
+    return newState[current]
+  }, store.state)
+}
+
 /**
  * 
  * @param {*} store         store 实例
@@ -16,6 +22,9 @@ const installModule = (store, rootState, path, module) => {
   // 这里我要对当前模块进行操作
   // 这里我需要遍历当前模块上的 actions、mutation、getters 都把他定义在
 
+  // 我要给当前订阅的事件 增加一个命名空间   a/change   b/changge   a/c/change    path [a]  [b]   [a, c]  
+  let namespace = store._modules.getNamespaced(path)      // 返回前缀即可
+ 
   // state
   // 将所有的子模块的状态安装到父模块的状态上
   // [a]  [b]          -----》 state
@@ -29,23 +38,26 @@ const installModule = (store, rootState, path, module) => {
 
   // mutation
   module.forEachMutation((mutation, key) => {
-    store._mutations[key] = store._mutations[key] || []
-    store._mutations[key].push((payload) => {
-      mutation.call(store, module.state, payload)
+    store._mutations[namespace+key] = store._mutations[namespace+key] || []
+    store._mutations[namespace+key].push((payload) => {
+      mutation.call(store, getState(store, path), payload)
+      store._subscribes.forEach(fn => {
+        fn(mutation, store.state)
+      })
     })
   })
   // action
   module.forEachAction((action, key) => {
-    store._actions[key] = store._actions[key] || []
-    store._actions[key].push((payload) => {
+    store._actions[namespace+key] = store._actions[namespace+key] || []
+    store._actions[namespace+key].push((payload) => {
       action.call(store, store, payload)
     })
   })
   // getter
   module.forEachGetter((getter, key) => {
     // 模块中 getter的名字重复了 会覆盖
-    store._wrappedGetters[key] = function() {
-      return getter(module.state)
+    store._wrappedGetters[namespace+key] = function() {
+      return getter(getState(store, path))
     }
   })
   module.forEachChild((child, key) => {
@@ -81,6 +93,7 @@ export class Store {    // 容器的初始化
     this._actions = {}
     this._mutations = {}
     this._wrappedGetters = {}
+    this._subscribes = []
 
     // 数据的格式化 格式化成我想要的结果（树）
 
@@ -91,10 +104,12 @@ export class Store {    // 容器的初始化
     // 2.安装模块
     installModule(this, state, [], this._modules.root)
 
-    console.log(state, this._wrappedGetters, this._mutations, this._actions)
-
     // 3. 将状态和getters 都定义在当前的vm上
     resetStoreVM(this, state)
+
+    // Vuex 的插件实现
+    // 插件内部会依次执行
+    options.plugins.forEach(plugin => plugin(this))
 
   }
 
@@ -115,6 +130,15 @@ export class Store {    // 容器的初始化
 
   dispatch = (type, payload) => {
     this._actions[type].forEach(action => action.call(this, payload))      // 发布订阅
+  }
+
+  replaceState(state) {
+    // 替换掉最新的状态
+    this._vm._data.$$state = state
+  }
+
+  subscribe = (fn) => {
+    this._subscribes.push(fn)
   }
 }
 
