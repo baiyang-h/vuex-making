@@ -520,7 +520,7 @@ _actions
 ### 命名空间的实现
 
 现在我们要实现Vuex的命名空间，主要是看 module 中的 namespaced 属性。其思想就是对路径的字符串拼接，增加上模块名。给 getters、mutations、actions的key值拼接上模块名。
- 
+
 主要是在初始化store时 的 installModule 方法中进行
 ```js
 class Store {
@@ -595,5 +595,135 @@ const installModule = (store, rootState, path, module) => {
 }
 ```
 
-### Vuex的插件实现
+
+### Vuex插件的实现
+
+先来说明一下Vuex中的插件，Vuex的store接收 `plugins` 选项，这个选项暴露出每次 mutation 的钩子。Vuex插件就是一个函数，它接收 store 作为唯一参数。
+
+```js
+const store = new Vuex.Store({
+  // ...
+  plugins: [myPlugin]
+})
+```
+
+```js
+const myPlugin = store => {
+  // 当 store 初始化后调用
+  store.subscribe((mutation, state) => {
+    // 每次 mutation 之后调用
+    // mutation 的格式为 { type, payload }
+  })
+}
+```
+
+每次执行mutation后都会执行这个监控方法。现在让我们来实现这个功能。
+
+首先我们现在 Vuex.Store上增加 plugins 插件属性， 为这个插件增加一个 persists 方法，该方法的作用就是每次 执行 mutation 后 我们将 state 的值保存到缓存中，让页面刷新后，从缓存中取值，显示的最后一次保存的值，让页面看起来好像有记忆功能一样
+
+```js
+Vuex.Store({
+  plugins: [
+    persists()
+  ]
+})
+```
+
+```js
+function persists() {
+  return function(store) {   // store 是当前默认传递的
+    let data = localStorage.getItem('VUEX:STATE')
+    if(data) {
+      store.replaceState(JSON.parse(data))
+    }
+    store.subscribe((mutation, state) => {
+      localStorage.setItem('VUEX:STATE', JSON.stringify(state))
+    })
+  }
+}
+```
+
+很明显这个实现用到的也是发布订阅模式，具体如下：
+
+```js
+class Store {
+  constructor() {
+    ...
+  	this._subscribes = []
+    ...
+    // Vuex 的插件实现
+    // 插件内部会依次执行
+    options.plugins.forEach(plugin => plugin(this))
+  }
+  ...
+  
+  subscribe = (fn) => {
+    this._subscribes.push(fn)
+  }
+}
+```
+
+初始化执行 `options.plugins.forEach(plugin => plugin(this))` 会执行插件内部定义的插件，将一个个相关的回调存到了  `_subscribes` 中，等执行 mutation 时，执行该数组中的所有方法，所以就想一个监听函数一样
+
+```js
+// mutation
+  module.forEachMutation((mutation, key) => {
+    ...
+    store._mutations[namespace+key].push((payload) => {
+      ...
+      store._subscribes.forEach(fn => {   // 关键部分
+        fn(mutation, store.state)
+      })
+    })
+  })
+```
+
+当 `commit` 时，会触发`_mutations` 中的所有方法，在这些方法内部我们会调用之前绑定到 `_subscribes` 上的方法，这些方法接收两个参数 `mutation`, `state`，所以就执行了方法内部的 `localStorage.setItem('VUEX:STATE', JSON.stringify(state))` 语句了。
+
+接下来我们再来说一下插件中定义的 `store.replaceState(JSON.parse(data))` 方法，作用是当刷新页面时从缓存中获取数据，state回到最后一次的效果，好像记忆功能一样
+
+```js
+class Store {
+  ...
+  replaceState(state) {
+    // 替换掉最新的状态
+    this._vm._data.$$state = state
+  }
+}
+```
+
+这样 state 就重新赋值了，但是这里有一个问题，因为是覆盖的原因，那么Store 中原本的 state 就是旧的了，如果我们不进行修改的话，那么每次更新页面将不会更新，因为 state 还是旧的state，所以我们定义一个方法，用于返回每个module 的新的 state
+
+```js
+function getState(store, path) {    // 获取最新的状态
+  return path.reduce((newState, current) => {
+    return newState[current]
+  }, store.state)
+}
+```
+
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  module.forEachMutation((mutation, key) => {
+    ...
+    store._mutations[namespace+key].push((payload) => {
+      ...
+      mutation.call(store, getState(store, path), payload)   // 每次传给mutation 方法的state参数是新的state
+      ...
+    })
+  })
+  ...
+  // getter
+  module.forEachGetter((getter, key) => {
+    store._wrappedGetters[namespace+key] = function() {
+      return getter(getState(store, path))   // getters 的 state 参数也一样
+    }
+  })
+    ...
+}
+  
+```
+
+
 
