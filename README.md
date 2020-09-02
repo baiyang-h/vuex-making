@@ -727,3 +727,55 @@ const installModule = (store, rootState, path, module) => {
 
 
 
+### 辅助函数
+
+
+
+```js
+import { mapState, mapGetters } from './vuex'
+
+export default {
+  name: 'app',
+  computed: {
+    ...mapState(['age']),
+    ...mapGetters(['myAge'])
+  },
+  methods: {
+
+  }
+}
+```
+
+```js
+// helpers.js
+
+export function mapState(stateArr) {
+  let obj = {}
+  stateArr.forEach(key => {
+    obj[key] = function() {
+      return this.$store.state[key]
+    }
+  })
+  return obj
+}
+
+export function mapGetters(gettersArr) {
+  let obj = {}
+  gettersArr.forEach(key => {
+    obj[key] = function() {
+      return this.$store.getters[key]
+    }
+  })
+  return obj
+}
+```
+
+```js
+// vuex/index.js
+
+...
+
+export * from './helpers'
+
+```
+
